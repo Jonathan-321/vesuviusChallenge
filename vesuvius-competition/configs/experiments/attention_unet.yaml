@@ -1,0 +1,33 @@
+# Attention UNet experiment
+# Inherits from configs/base/default.yaml
+
+defaults:
+  - base/default
+
+experiment:
+  name: attention_unet_efficientnet
+
+model:
+  architecture: attention_unet
+  encoder: efficientnet-b3
+  
+training:
+  batch_size: 6
+  learning_rate: 5e-4
+  num_epochs: 80
+
+loss:
+  name: combined
+  dice_weight: 0.7
+  bce_weight: 0.3
+
+augmentation:
+  train:
+    - RandomCrop: {height: 512, width: 512}
+    - HorizontalFlip: {p: 0.5}
+    - VerticalFlip: {p: 0.5}
+    - RandomRotate90: {p: 0.5}
+    - ShiftScaleRotate: {shift_limit: 0.1, scale_limit: 0.2, rotate_limit: 45, p: 0.7}
+    - ElasticTransform: {alpha: 120, sigma: 120 * 0.05, alpha_affine: 120 * 0.03, p: 0.5}
+    - GridDistortion: {num_steps: 5, distort_limit: 0.3, p: 0.5}
+    - RandomBrightnessContrast: {brightness_limit: 0.3, contrast_limit: 0.3, p: 0.7}
