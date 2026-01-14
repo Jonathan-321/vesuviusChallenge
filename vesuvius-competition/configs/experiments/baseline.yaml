@@ -1,0 +1,22 @@
+# Baseline UNet experiment
+# Inherits from configs/base/default.yaml
+
+defaults:
+  - base/default
+
+experiment:
+  name: baseline_unet_resnet34
+
+model:
+  architecture: unet
+  encoder: resnet34
+  
+training:
+  batch_size: 8
+  learning_rate: 1e-3
+  num_epochs: 50
+
+loss:
+  name: dice
+  dice_weight: 1.0
+  bce_weight: 0.0
