@@ -7,12 +7,160 @@ from pathlib import Path
 from tqdm import tqdm
 import zipfile
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import json
+import tifffile
+import scipy.ndimage as ndi
+from skimage.morphology import remove_small_objects
 
-from .predict import VesuviusPredictor
+from .predict import VesuviusPredictor, VesuviusPredictor3D
 
 logger = logging.getLogger(__name__)
+
+
+def validate_coverage(mask: np.ndarray, vol_id: str, min_cov: float = 0.01, max_cov: float = 0.30) -> float:
+    """
+    Quick sanity check on mask coverage to catch inverted predictions.
+    """
+    coverage = float(mask.mean())
+    if coverage < min_cov or coverage > max_cov:
+        logger.warning(
+            f"[{vol_id}] coverage {coverage:.2%} outside expected range "
+            f"({min_cov:.0%}-{max_cov:.0%})."
+        )
+    else:
+        logger.info(f"[{vol_id}] coverage {coverage:.2%}")
+    return coverage
+
+
+def build_anisotropic_struct(z_radius: int, xy_radius: int):
+    """Build anisotropic structuring element for 3D morphology."""
+    z, r = z_radius, xy_radius
+
+    if z == 0 and r == 0:
+        return None
+
+    if z == 0 and r > 0:
+        size = 2 * r + 1
+        struct = np.zeros((1, size, size), dtype=bool)
+        cy, cx = r, r
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if dy * dy + dx * dx <= r * r:
+                    struct[0, cy + dy, cx + dx] = True
+        return struct
+
+    if z > 0 and r == 0:
+        struct = np.zeros((2 * z + 1, 1, 1), dtype=bool)
+        struct[:, 0, 0] = True
+        return struct
+
+    depth = 2 * z + 1
+    size = 2 * r + 1
+    struct = np.zeros((depth, size, size), dtype=bool)
+    cz, cy, cx = z, r, r
+    for dz in range(-z, z + 1):
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if dy * dy + dx * dx <= r * r:
+                    struct[cz + dz, cy + dy, cx + dx] = True
+    return struct
+
+
+def topo_postprocess(
+    probs: np.ndarray,
+    t_low: float = 0.5,
+    t_high: float = 0.9,
+    z_radius: int = 1,
+    xy_radius: int = 0,
+    dust_min_size: int = 100,
+) -> np.ndarray:
+    """3D postprocessing: hysteresis + anisotropic closing + dust removal."""
+    strong = probs >= t_high
+    weak = probs >= t_low
+
+    if not strong.any():
+        return np.zeros_like(probs, dtype=np.uint8)
+
+    struct_hyst = ndi.generate_binary_structure(3, 3)
+    mask = ndi.binary_propagation(strong, mask=weak, structure=struct_hyst)
+
+    if not mask.any():
+        return np.zeros_like(probs, dtype=np.uint8)
+
+    if z_radius > 0 or xy_radius > 0:
+        struct_close = build_anisotropic_struct(z_radius, xy_radius)
+        if struct_close is not None:
+            mask = ndi.binary_closing(mask, structure=struct_close)
+
+    if dust_min_size > 0:
+        mask = remove_small_objects(mask.astype(bool), min_size=dust_min_size)
+
+    return mask.astype(np.uint8)
+
+
+def create_submission_3d(
+    model_path: str,
+    test_dir: str,
+    output_zip: str,
+    test_csv: Optional[str] = None,
+    config_path: Optional[str] = None,
+    device: str = 'cuda',
+    roi_size: Tuple[int, int, int] = (160, 160, 160),
+    overlap: float = 0.5,
+    class_index: int = 1,
+    tta: bool = True,
+    t_low: float = 0.5,
+    t_high: float = 0.9,
+    z_radius: int = 1,
+    xy_radius: int = 0,
+    dust_min_size: int = 100,
+):
+    """
+    Create 3D submission ZIP with per-id .tif masks.
+    """
+    predictor = VesuviusPredictor3D(
+        model_path=model_path,
+        device=device,
+        roi_size=roi_size,
+        overlap=overlap,
+        class_index=class_index,
+        config_path=config_path,
+    )
+
+    test_path = Path(test_dir)
+    if test_csv is None:
+        test_csv = str((test_path.parent / "test.csv").resolve())
+
+    test_df = pd.read_csv(test_csv)
+    output_dir = Path(output_zip).parent / "submission_masks"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for image_id in tqdm(test_df["id"], desc="Predicting 3D volumes"):
+            tif_path = test_path / f"{image_id}.tif"
+            volume = tifffile.imread(str(tif_path))
+
+            if tta:
+                probs = predictor.predict_volume_tta(volume)
+            else:
+                probs = predictor.predict_volume(volume)
+
+            mask = topo_postprocess(
+                probs,
+                t_low=t_low,
+                t_high=t_high,
+                z_radius=z_radius,
+                xy_radius=xy_radius,
+                dust_min_size=dust_min_size,
+            )
+
+            out_path = output_dir / f"{image_id}.tif"
+            tifffile.imwrite(str(out_path), mask.astype(np.uint8))
+            zf.write(out_path, arcname=f"{image_id}.tif")
+            out_path.unlink()
+
+    logger.info(f"3D submission saved to {output_zip}")
 
 
 def create_submission(
@@ -64,6 +212,7 @@ def create_submission(
         
         # Threshold
         pred_binary = (pred_prob > threshold).astype(np.uint8)
+        validate_coverage(pred_binary, vol_id)
         
         predictions[vol_id] = {
             'binary': pred_binary,
@@ -220,6 +369,7 @@ def ensemble_predictions(
         
         # Threshold ensemble prediction
         pred_binary = (prob_sum > threshold).astype(np.uint8)
+        validate_coverage(pred_binary, vol_id)
         
         ensemble_preds[vol_id] = {
             'binary': pred_binary,
@@ -244,18 +394,52 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, default=0.5, help="Prediction threshold")
     parser.add_argument("--device", default="cuda", help="Device")
     parser.add_argument("--tta", action="store_true", help="Use test-time augmentation")
-    parser.add_argument("--format", choices=['kaggle', 'custom'], default='kaggle', help="Submission format")
+    parser.add_argument(
+        "--format",
+        choices=['kaggle', 'custom', 'kaggle_3d'],
+        default='kaggle',
+        help="Submission format",
+    )
+    parser.add_argument("--config", default=None, help="Config path for 3D models")
+    parser.add_argument("--test-csv", default=None, help="Path to test.csv for 3D submission")
+    parser.add_argument("--roi", type=int, nargs=3, default=[160, 160, 160], help="ROI size for 3D sliding window")
+    parser.add_argument("--overlap", type=float, default=0.5, help="Overlap for 3D sliding window")
+    parser.add_argument("--class-index", type=int, default=1, help="Foreground class index for 3D")
+    parser.add_argument("--t-low", type=float, default=0.5, help="Hysteresis low threshold")
+    parser.add_argument("--t-high", type=float, default=0.9, help="Hysteresis high threshold")
+    parser.add_argument("--z-radius", type=int, default=1, help="Anisotropic closing z-radius")
+    parser.add_argument("--xy-radius", type=int, default=0, help="Anisotropic closing xy-radius")
+    parser.add_argument("--dust-min", type=int, default=100, help="Remove small objects below this size")
     
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
     
-    create_submission(
-        args.model,
-        args.test,
-        args.output,
-        args.threshold,
-        args.device,
-        args.tta,
-        args.format
-    )
+    if args.format == 'kaggle_3d':
+        create_submission_3d(
+            model_path=args.model,
+            test_dir=args.test,
+            output_zip=args.output,
+            test_csv=args.test_csv,
+            config_path=args.config,
+            device=args.device,
+            roi_size=tuple(args.roi),
+            overlap=args.overlap,
+            class_index=args.class_index,
+            tta=args.tta,
+            t_low=args.t_low,
+            t_high=args.t_high,
+            z_radius=args.z_radius,
+            xy_radius=args.xy_radius,
+            dust_min_size=args.dust_min,
+        )
+    else:
+        create_submission(
+            args.model,
+            args.test,
+            args.output,
+            args.threshold,
+            args.device,
+            args.tta,
+            args.format
+        )

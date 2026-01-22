@@ -147,11 +147,18 @@ class Trainer:
     
     def calculate_dice(self, pred, target, threshold=0.5):
         """Calculate Dice coefficient"""
-        pred = torch.sigmoid(pred)
-        pred = (pred > threshold).float()
-        
-        intersection = (pred * target).sum()
-        union = pred.sum() + target.sum()
+        if pred.dim() > target.dim() and pred.size(1) > 1:
+            # Multi-class: use class 1 as foreground
+            prob = torch.softmax(pred, dim=1)[:, 1]
+            pred_bin = (prob > threshold).float()
+            target_bin = (target == 1).float()
+        else:
+            prob = torch.sigmoid(pred)
+            pred_bin = (prob > threshold).float()
+            target_bin = target.float()
+
+        intersection = (pred_bin * target_bin).sum()
+        union = pred_bin.sum() + target_bin.sum()
         
         dice = (2.0 * intersection + 1e-7) / (union + 1e-7)
         return dice.item()
@@ -268,15 +275,21 @@ def get_optimizer(model, config):
     """Create optimizer from config"""
     opt_config = config['training']
     opt_name = opt_config.get('optimizer', 'adamw').lower()
-    lr = opt_config['learning_rate']
-    weight_decay = opt_config.get('weight_decay', 1e-4)
+    def _as_float(value, name):
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a float, got {value!r}") from exc
+
+    lr = _as_float(opt_config['learning_rate'], 'learning_rate')
+    weight_decay = _as_float(opt_config.get('weight_decay', 1e-4), 'weight_decay')
     
     if opt_name == 'adam':
         return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif opt_name == 'adamw':
         return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif opt_name == 'sgd':
-        momentum = opt_config.get('momentum', 0.9)
+        momentum = _as_float(opt_config.get('momentum', 0.9), 'momentum')
         return torch.optim.SGD(
             model.parameters(),
             lr=lr,

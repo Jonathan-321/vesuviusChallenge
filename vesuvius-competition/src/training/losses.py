@@ -116,6 +116,31 @@ class DiceBCELoss(nn.Module):
         return self.dice_weight * dice + self.bce_weight * bce
 
 
+class DiceCELoss(nn.Module):
+    """
+    Combination of Dice loss (softmax) and Cross-Entropy for multi-class
+    """
+
+    def __init__(self, dice_weight=0.5, ce_weight=0.5):
+        super().__init__()
+        self.dice_weight = dice_weight
+        self.ce_weight = ce_weight
+        self.dice_loss = DiceLoss(softmax=True, to_onehot_y=True)
+        self.ce_loss = nn.CrossEntropyLoss()
+
+    def forward(self, pred, target):
+        if target.ndim == pred.ndim - 1:
+            dice_target = target.unsqueeze(1)
+            ce_target = target
+        else:
+            dice_target = target
+            ce_target = target.squeeze(1) if target.shape[1] == 1 else target
+
+        dice = self.dice_loss(pred, dice_target)
+        ce = self.ce_loss(pred, ce_target.long())
+        return self.dice_weight * dice + self.ce_weight * ce
+
+
 class TverskyLoss(nn.Module):
     """
     Tversky loss - good for handling class imbalance
@@ -183,6 +208,15 @@ def get_loss_function(config):
             bce_weight=loss_config.get('bce_weight', 0.5),
             pos_weight=loss_config.get('pos_weight', 30.0)
         )
+
+    elif loss_type in ('dice_ce', 'dice_cross_entropy'):
+        return DiceCELoss(
+            dice_weight=loss_config.get('dice_weight', 0.5),
+            ce_weight=loss_config.get('ce_weight', 0.5)
+        )
+
+    elif loss_type in ('cross_entropy', 'ce'):
+        return nn.CrossEntropyLoss()
     
     elif loss_type == 'topology_aware':
         return TopologyAwareLoss(

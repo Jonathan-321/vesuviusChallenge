@@ -29,7 +29,21 @@ image = (
         "pandas>=2.0.0",
         "scikit-learn>=1.3.0",
         "matplotlib>=3.7.0",
+        "tifffile>=2023.9.26",
+        "scikit-image>=0.24.0",
     ])
+    .add_local_dir(
+        ".",
+        remote_path="/workspace",
+        ignore=[
+            ".git",
+            "venv",
+            "data",
+            "models",
+            "logs",
+            "__pycache__",
+        ],
+    )
 )
 
 # Mount points
@@ -37,12 +51,7 @@ DATA_DIR = "/mnt/data"
 MODEL_DIR = "/mnt/models"
 
 
-@app.function(
-    image=image,
-    volumes={DATA_DIR: volume},
-    timeout=7200,
-)
-def upload_processed_data(local_path: str = "data/processed"):
+def upload_processed_data(local_path: str = "data/processed_3d"):
     """
     Upload preprocessed .npz files from local machine to Modal volume
     Run this ONCE after local preprocessing
@@ -55,34 +64,21 @@ def upload_processed_data(local_path: str = "data/processed"):
     from pathlib import Path
     
     local_path = Path(local_path)
-    remote_path = Path(DATA_DIR) / "processed"
-    remote_path.mkdir(parents=True, exist_ok=True)
+    if not local_path.exists():
+        print(f"❌ Local path not found: {local_path}")
+        return
     
     print(f"📤 Uploading processed data from {local_path} to Modal volume...")
     
-    # Get list of files
-    npz_files = list(local_path.glob("*.npz"))
-    
-    if not npz_files:
-        print(f"❌ No .npz files found in {local_path}")
-        print("   Make sure you've run the preprocessing script first:")
-        print("   python scripts/preprocessing/prepare_data.py")
-        return
-    
-    print(f"Found {len(npz_files)} files to upload")
-    
-    # Copy files (Modal CLI handles the actual upload)
-    for f in npz_files:
-        print(f"  Uploading {f.name}...")
-        # Modal's volume.put_file will be used by CLI
-    
-    volume.commit()
-    print(f"✅ Upload complete! {len(npz_files)} files uploaded to Modal volume")
+    with volume.batch_upload(force=True) as batch:
+        batch.put_directory(str(local_path), f"/data/{local_path.name}")
+
+    print(f"✅ Upload complete to /data/{local_path.name} in Modal volume")
 
 
 @app.function(
     image=image,
-    volumes={DATA_DIR: volume},
+    volumes={"/mnt": volume},
 )
 def list_data():
     """
@@ -103,9 +99,9 @@ def list_data():
         print("❌ Data directory not found in Modal volume")
         return
     
-    processed_dir = data_path / "processed"
+    processed_dir = data_path / "processed_3d"
     if processed_dir.exists():
-        files = sorted(list(processed_dir.glob("*.npz")))
+        files = sorted(list(processed_dir.glob("*.npz"))) + sorted(list((processed_dir / "images").glob("*.npz"))) + sorted(list((processed_dir / "masks").glob("*.npz")))
         print(f"\n📁 Processed data ({len(files)} files):")
         
         total_size = 0
@@ -138,14 +134,13 @@ def train_single_model(config_path: str):
     """
     import sys
     import os
-    import yaml
     import torch
     from pathlib import Path
     
-    # Add mounted volume paths
-    sys.path.append("/mnt")
+    # Add code path mounted into the image
+    sys.path.append("/workspace")
     print(f"Python path: {sys.path}")
-    print(f"Contents of /mnt: {os.listdir('/mnt')}" if os.path.exists('/mnt') else "/mnt doesn't exist")
+    print(f"Contents of /workspace: {os.listdir('/workspace')}")
     
     # Import our modules from mounted volume
     from src.models import get_model
@@ -157,34 +152,40 @@ def train_single_model(config_path: str):
     print(f"   Config: {config_path}")
     
     # Load config from mounted volume
-    config_path = f"/mnt/{config_path}"
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Merge with base config if it exists
-    base_config_path = Path('/mnt/configs/base/default.yaml')
-    if base_config_path.exists():
-        with open(base_config_path, 'r') as f:
-            base_config = yaml.safe_load(f)
-        
-        # Deep merge configs
-        for key in base_config:
-            if key not in config:
-                config[key] = base_config[key]
-            elif isinstance(base_config[key], dict):
-                for subkey in base_config[key]:
-                    if key not in config:
-                        config[key] = {}
-                    if subkey not in config[key]:
-                        config[key][subkey] = base_config[key][subkey]
+    from train import load_config
+
+    config_path = f"/workspace/{config_path}"
+    config = load_config(config_path)
     
     # Update paths for Modal
-    config['data']['processed_dir'] = f"{DATA_DIR}/processed"
+    data_dir = Path("/mnt") / config['data']['processed_dir']
+    config['data']['processed_dir'] = str(data_dir)
+    config.setdefault('paths', {})
     config['paths']['checkpoint_dir'] = f"{MODEL_DIR}/checkpoints/{config['experiment']['name']}"
     config['checkpoint_dir'] = config['paths']['checkpoint_dir']
     
     # Create checkpoint directory
     Path(config['checkpoint_dir']).mkdir(parents=True, exist_ok=True)
+
+    # Tee stdout/stderr to a log file on the volume for postmortem debugging.
+    log_path = Path(config['checkpoint_dir']) / "train.log"
+    log_file = open(log_path, "w", buffering=1)
+
+    class _Tee:
+        def __init__(self, *streams):
+            self.streams = streams
+
+        def write(self, data):
+            for stream in self.streams:
+                stream.write(data)
+                stream.flush()
+
+        def flush(self):
+            for stream in self.streams:
+                stream.flush()
+
+    sys.stdout = _Tee(sys.stdout, log_file)
+    sys.stderr = _Tee(sys.stderr, log_file)
     
     print(f"\n{'='*60}")
     print(f"Experiment: {config['experiment']['name']}")
@@ -193,7 +194,8 @@ def train_single_model(config_path: str):
     # Get volume IDs
     import numpy as np
     data_path = Path(config['data']['processed_dir'])
-    volume_files = sorted(list(data_path.glob('volume_*.npz')))
+    volume_root = data_path / "images" if (data_path / "images").exists() else data_path
+    volume_files = sorted(list(volume_root.glob('volume_*.npz')))
     
     if not volume_files:
         raise FileNotFoundError(f"No volume files found in {data_path}")
@@ -288,7 +290,7 @@ def train_multiple_models(config_paths: list[str]):
 
 @app.function(
     image=image,
-    volumes={MODEL_DIR: volume},
+    volumes={"/mnt": volume},
 )
 def download_models(local_dir: str = "models/from_modal"):
     """
@@ -328,10 +330,135 @@ def download_models(local_dir: str = "models/from_modal"):
     print(f"\n✅ Ready to download. Modal CLI will handle the transfer.")
 
 
+@app.function(
+    image=image,
+    volumes={"/mnt": volume},
+)
+def show_train_log(experiment: str, lines: int = 200):
+    """
+    Show the tail of a training log from Modal volume
+
+    Usage:
+        modal run src/modal_training.py::show_train_log --experiment surface_unet3d_baseline
+    """
+    from pathlib import Path
+
+    log_path = Path(MODEL_DIR) / "checkpoints" / experiment / "train.log"
+    if not log_path.exists():
+        print(f"❌ Log file not found: {log_path}")
+        return
+
+    log_lines = log_path.read_text().splitlines()
+    tail = log_lines[-lines:] if lines > 0 else log_lines
+    print("\n".join(tail))
+
+
+@app.function(
+    image=image,
+    gpu="A100-80GB",
+    volumes={"/mnt": volume},
+)
+def val_sweep(
+    model_path: str = "/mnt/models/checkpoints/surface_unet3d_baseline/final_model.pth",
+    config_path: str = "configs/experiments/surface_unet3d.yaml",
+    max_volumes: int = 2,
+    t_low_values: str = "0.3,0.4,0.5",
+    t_high_values: str = "0.8,0.9",
+    dust_values: str = "50,100,200",
+    z_radius: int = 1,
+    xy_radius: int = 0,
+    use_tta: bool = True,
+):
+    """
+    Quick val sweep over thresholds/postprocess on a subset of val volumes.
+
+    Usage:
+        modal run src/modal_training.py::val_sweep --model-path /mnt/models/checkpoints/.../final_model.pth
+    """
+    import numpy as np
+    import torch
+    import sys
+    sys.path.append("/workspace")
+    from train import load_config, get_volume_ids
+    from src.inference.predict import VesuviusPredictor3D
+    from src.inference.create_submission import topo_postprocess
+
+    def _parse_floats(s: str):
+        return [float(x) for x in s.split(",") if x]
+
+    def _parse_ints(s: str):
+        return [int(x) for x in s.split(",") if x]
+
+    tl_values = _parse_floats(t_low_values)
+    th_values = _parse_floats(t_high_values)
+    dust_vals = _parse_ints(dust_values)
+
+    cfg = load_config(f"/workspace/{config_path}")
+    cfg['data']['processed_dir'] = str(Path("/mnt") / cfg['data']['processed_dir'])
+    train_ids, val_ids = get_volume_ids(
+        cfg['data']['processed_dir'],
+        cfg['validation']['split_ratio'],
+        cfg['validation']['seed'],
+    )
+    val_ids = val_ids[:max_volumes]
+
+    predictor = VesuviusPredictor3D(
+        model_path=model_path,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        roi_size=tuple(cfg['data']['patch_size']),
+        overlap=0.5,
+        class_index=1,
+        config_path=f"/workspace/{config_path}",
+    )
+
+    results = []
+    for vid in val_ids:
+        vol_path = Path(cfg['data']['processed_dir']) / "images" / f"volume_{vid}.npz"
+        mask_path = Path(cfg['data']['processed_dir']) / "masks" / f"mask_{vid}.npz"
+        volume = np.load(vol_path)['data']
+        mask = np.load(mask_path)['data']
+        print(f"\n=== Val volume {vid} shape {volume.shape} ===")
+        probs = predictor.predict_volume_tta(volume) if use_tta else predictor.predict_volume(volume)
+        gt = (mask == 1).astype(np.uint8)
+
+        for tl in tl_values:
+            for th in th_values:
+                for dust in dust_vals:
+                    pred = topo_postprocess(
+                        probs,
+                        t_low=tl,
+                        t_high=th,
+                        z_radius=z_radius,
+                        xy_radius=xy_radius,
+                        dust_min_size=dust,
+                    )
+                    inter = (pred & gt).sum()
+                    dice = (2 * inter) / (pred.sum() + gt.sum() + 1e-6)
+                    results.append((vid, tl, th, dust, dice))
+                    print(f"vid {vid} tl {tl} th {th} dust {dust} -> Dice {dice:.4f}")
+
+    best = sorted(results, key=lambda x: x[-1], reverse=True)[:5]
+    print("\nTop results:")
+    for vid, tl, th, dust, dice in best:
+        print(f"vid {vid} tl {tl} th {th} dust {dust} -> Dice {dice:.4f}")
+
+    # Persist summary to volume for easy retrieval
+    summary_path = Path(MODEL_DIR) / "val_sweep_results.txt"
+    with summary_path.open("a") as f:
+        f.write(f"\nRun model {model_path}, config {config_path}, vols {val_ids}\n")
+        for vid, tl, th, dust, dice in results:
+            f.write(f"{vid}, tl={tl}, th={th}, dust={dust}, dice={dice:.6f}\n")
+        f.write("Top:\n")
+        for vid, tl, th, dust, dice in best:
+            f.write(f"{vid}, tl={tl}, th={th}, dust={dust}, dice={dice:.6f}\n")
+    print(f"\nResults written to {summary_path}")
+
+
 @app.local_entrypoint()
 def main(
     command: str = "upload",
-    config: str = "configs/experiments/baseline.yaml"
+    config: str = "configs/experiments/baseline.yaml",
+    experiment: str = ""
 ):
     """
     Main CLI interface for Modal training
@@ -351,11 +478,14 @@ def main(
         
         # Download trained models
         modal run src/modal_training.py --command download
+
+        # Show training log (by experiment name)
+        modal run src/modal_training.py --command show_log --experiment surface_unet3d_baseline
     """
     
     if command == "upload":
         print("📤 Uploading data to Modal...")
-        upload_processed_data.remote()
+        upload_processed_data()
         
     elif command == "list":
         list_data.remote()
@@ -375,6 +505,12 @@ def main(
         
     elif command == "download":
         download_models.remote()
+
+    elif command == "show_log":
+        if not experiment:
+            print("❌ Missing --experiment for show_log")
+            return
+        show_train_log.remote(experiment)
         
     else:
         print(f"❌ Unknown command: {command}")
