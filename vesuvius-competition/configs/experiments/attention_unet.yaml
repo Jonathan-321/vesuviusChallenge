@@ -10,6 +10,11 @@ experiment:
 model:
   architecture: attention_unet
   encoder: efficientnet-b3
+  in_channels: 32
+
+data:
+  processed_dir: data/proper_training
+  patch_size: [32, 128, 128]
   
 training:
   batch_size: 6

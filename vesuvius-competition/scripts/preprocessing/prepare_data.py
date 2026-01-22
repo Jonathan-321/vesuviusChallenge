@@ -11,12 +11,16 @@ from tqdm import tqdm
 import argparse
 
 
-def process_volume(volume_id, raw_dir, processed_dir, depth=65):
+def process_volume(volume_id, raw_dir, processed_dir, depth=None, mask_mode="3d"):
     """
     Process a single volume from competition data
     """
     raw_dir = Path(raw_dir)
     processed_dir = Path(processed_dir)
+    images_dir = processed_dir / "images"
+    masks_dir = processed_dir / "masks"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    masks_dir.mkdir(parents=True, exist_ok=True)
     
     # Paths to input files
     vol_file = raw_dir / "train_images" / f"{volume_id}.tif"
@@ -33,12 +37,20 @@ def process_volume(volume_id, raw_dir, processed_dir, depth=65):
     print(f"📦 Processing Volume {volume_id}...")
     
     try:
-        # Load mask (single image)
-        mask = np.array(Image.open(mask_file)).astype(np.uint8)
+        # Load mask
+        if mask_mode == "3d":
+            with Image.open(mask_file) as img:
+                mask_slices = [np.array(page).astype(np.uint8) for page in ImageSequence.Iterator(img)]
+            mask = np.stack(mask_slices, axis=0)
+        else:
+            mask = np.array(Image.open(mask_file)).astype(np.uint8)
         print(f"   Mask shape: {mask.shape}")
         
         # Load 3D volume from multi-page TIFF
-        print(f"   Loading {depth} slices from TIFF...")
+        with Image.open(vol_file) as img:
+            total_slices = img.n_frames
+        depth = depth or total_slices
+        print(f"   Loading {depth} slices from TIFF (available: {total_slices})...")
         with Image.open(vol_file) as img:
             slices = []
             for i, page in enumerate(ImageSequence.Iterator(img)):
@@ -58,8 +70,8 @@ def process_volume(volume_id, raw_dir, processed_dir, depth=65):
         print(f"   Mask size: {mask_size_mb:.1f} MB")
         
         # Save as compressed .npz
-        output_vol = processed_dir / f"volume_{volume_id}.npz"
-        output_mask = processed_dir / f"mask_{volume_id}.npz"
+        output_vol = images_dir / f"volume_{volume_id}.npz"
+        output_mask = masks_dir / f"mask_{volume_id}.npz"
         
         print(f"   Compressing and saving...")
         np.savez_compressed(output_vol, data=volume)
@@ -98,8 +110,8 @@ def main():
     parser.add_argument(
         "--depth",
         type=int,
-        default=65,
-        help="Number of slices to extract from each volume"
+        default=None,
+        help="Number of slices to extract from each volume (default: all)"
     )
     parser.add_argument(
         "--volume_ids",
@@ -107,6 +119,18 @@ def main():
         nargs="+",
         default=None,
         help="Specific volume IDs to process (optional)"
+    )
+    parser.add_argument(
+        "--mask-mode",
+        choices=["2d", "3d"],
+        default="3d",
+        help="Whether to load 2D or 3D masks"
+    )
+    parser.add_argument(
+        "--max-volumes",
+        type=int,
+        default=None,
+        help="Optional cap on number of volumes to process"
     )
     
     args = parser.parse_args()
@@ -134,13 +158,18 @@ def main():
     else:
         volume_ids = args.volume_ids
     
+    # Optionally cap volume count
+    if args.max_volumes is not None:
+        volume_ids = volume_ids[:args.max_volumes]
+
     # Process all volumes
     print(f"{'='*60}")
     print(f"Starting Preprocessing")
     print(f"{'='*60}")
     print(f"Input directory: {raw_dir}")
     print(f"Output directory: {processed_dir}")
-    print(f"Depth: {args.depth} slices")
+    print(f"Depth: {args.depth or 'all'} slices")
+    print(f"Mask mode: {args.mask_mode}")
     print(f"Volumes to process: {len(volume_ids)}")
     print(f"{'='*60}\n")
     
@@ -148,7 +177,7 @@ def main():
     failed = []
     
     for vid in tqdm(volume_ids, desc="Processing volumes"):
-        if process_volume(vid, raw_dir, processed_dir, args.depth):
+        if process_volume(vid, raw_dir, processed_dir, args.depth, args.mask_mode):
             successful += 1
         else:
             failed.append(vid)
@@ -165,7 +194,7 @@ def main():
     print(f"{'='*60}\n")
     
     # Calculate total size
-    processed_files = list(processed_dir.glob("*.npz"))
+    processed_files = list((processed_dir / "images").glob("*.npz")) + list((processed_dir / "masks").glob("*.npz"))
     total_size = sum(f.stat().st_size for f in processed_files)
     total_size_gb = total_size / (1024**3)
     

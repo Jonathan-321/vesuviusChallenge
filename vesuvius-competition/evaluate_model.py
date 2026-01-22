@@ -46,7 +46,9 @@ def evaluate_on_validation(
     
     # Get validation volumes
     data_path = Path(data_dir)
-    volume_files = sorted(list(data_path.glob('volume_*.npz')))
+    volume_root = data_path / "images" if (data_path / "images").exists() else data_path
+    mask_root = data_path / "masks" if (data_path / "masks").exists() else data_path
+    volume_files = sorted(list(volume_root.glob('volume_*.npz')))
     
     # Use same split as training
     np.random.seed(42)
@@ -64,7 +66,7 @@ def evaluate_on_validation(
     # Process each validation volume
     for vol_file in tqdm(val_files, desc="Evaluating"):
         vol_id = vol_file.stem.replace('volume_', '')
-        mask_file = data_path / f"mask_{vol_id}.npz"
+        mask_file = mask_root / f"mask_{vol_id}.npz"
         
         if not mask_file.exists():
             logger.warning(f"Mask not found for {vol_id}")
@@ -78,14 +80,17 @@ def evaluate_on_validation(
             mask = mdata['data'] if 'data' in mdata else mdata['mask'] if 'mask' in mdata else mdata[list(mdata.keys())[0]]
         
         # Ensure correct shapes
-        if volume.shape != (65, 320, 320) or mask.shape != (320, 320):
+        if volume.ndim != 3 or mask.ndim != 2 or mask.shape != volume.shape[1:]:
             logger.warning(f"Skipping {vol_id} due to shape mismatch")
             continue
         
         # Sample random patches for faster evaluation
         d, h, w = volume.shape
-        patch_size = (32, 128, 128)
+        patch_size = (predictor.in_channels, 128, 128)
         pd, ph, pw = patch_size
+        if d < pd:
+            logger.warning(f"Skipping {vol_id} due to insufficient depth ({d} < {pd})")
+            continue
         
         for _ in range(num_samples):
             # Random position
