@@ -345,9 +345,10 @@ class VesuviusPredictor3D:
             roi_size=self.roi_size,
             overlap=self.overlap,
             mode="gaussian",
+            sw_batch_size=self.sw_batch_size,
         )
         with torch.no_grad():
-            logits = inferer(volume_tensor, self.model, sw_batch_size=self.sw_batch_size)
+            logits = inferer(volume_tensor, self.model)
         return logits
 
     def predict_volume(self, volume: np.ndarray) -> np.ndarray:
