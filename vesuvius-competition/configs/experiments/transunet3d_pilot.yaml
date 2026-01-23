@@ -1,0 +1,38 @@
+# TransUNet 3D pilot run (short) for surface detection
+defaults:
+  - base/default
+
+experiment:
+  name: transunet3d_pilot
+  description: Short pilot (20 epochs) TransUNet3D with fewer samples per volume
+
+model:
+  architecture: unet3d  # Placeholder; actual TransUNet3D not wired, so this file is a stub
+  spatial_dims: 3
+  in_channels: 1
+  out_channels: 3
+  channels: [32, 64, 128, 256, 512]
+  strides: [2, 2, 2, 2]
+
+data:
+  processed_dir: data/processed_3d
+  patch_size: [160, 160, 160]
+  mask_mode: multiclass
+  samples_per_volume: 400
+  val_samples_per_volume: 100
+  augment: true
+
+training:
+  batch_size: 1
+  learning_rate: 3e-4
+  weight_decay: 1e-4
+  epochs: 20
+  num_workers: 4
+  mixed_precision: false
+  scheduler: cosine_warmup
+  gradient_accumulation: 4
+
+loss:
+  type: dice_ce
+  dice_weight: 0.3
+  ce_weight: 0.7
