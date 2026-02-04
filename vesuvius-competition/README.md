@@ -12,9 +12,9 @@ source venv/bin/activate
 # 2. Configure API keys in .env
 # Edit .env and add your Kaggle, WandB, and Modal credentials
 
-# 3. Download competition data
-kaggle competitions download -c vesuvius-challenge-ink-detection
-unzip vesuvius-challenge-ink-detection.zip -d data/raw/
+# 3. Download competition data (surface detection track)
+kaggle competitions download -c vesuvius-challenge-surface-detection
+unzip vesuvius-challenge-surface-detection.zip -d data/raw/
 
 # 4. Preprocess data
 python scripts/preprocessing/prepare_data.py
@@ -22,6 +22,13 @@ python scripts/preprocessing/prepare_data.py
 # 5. Train baseline model
 python train.py --config configs/experiments/baseline.yaml
 ```
+
+## 🧯 Troubleshooting
+
+- If you see `ValueError: <COMPRESSION.LZW: 5> requires the 'imagecodecs' package`,
+  install the dependency: `python -m pip install imagecodecs`.
+- If you see `sliding_window_inference() got multiple values for argument 'sw_batch_size'`,
+  pull the latest repo version (the inference path was updated to call MONAI directly).
 
 ## 📁 Project Structure
 
