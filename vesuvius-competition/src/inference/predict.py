@@ -320,7 +320,7 @@ class VesuviusPredictor3D:
             state_dict = checkpoint.get('model_state_dict') or checkpoint.get('state_dict') or checkpoint
 
         if config is None and config_path:
-            from train import load_config
+            from src.training.train import load_config
             config = load_config(config_path)
 
         if config is None:
@@ -345,9 +345,10 @@ class VesuviusPredictor3D:
             roi_size=self.roi_size,
             overlap=self.overlap,
             mode="gaussian",
+            sw_batch_size=self.sw_batch_size,
         )
         with torch.no_grad():
-            logits = inferer(volume_tensor, self.model, sw_batch_size=self.sw_batch_size)
+            logits = inferer(volume_tensor, self.model)
         return logits
 
     def predict_volume(self, volume: np.ndarray) -> np.ndarray:

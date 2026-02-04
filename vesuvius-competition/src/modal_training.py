@@ -152,7 +152,7 @@ def train_single_model(config_path: str):
     print(f"   Config: {config_path}")
     
     # Load config from mounted volume
-    from train import load_config
+    from src.training.train import load_config
 
     config_path = f"/workspace/{config_path}"
     config = load_config(config_path)
@@ -379,7 +379,7 @@ def val_sweep(
     import torch
     import sys
     sys.path.append("/workspace")
-    from train import load_config, get_volume_ids
+    from src.training.train import load_config, get_volume_ids
     from src.inference.predict import VesuviusPredictor3D
     from src.inference.create_submission import topo_postprocess
 
