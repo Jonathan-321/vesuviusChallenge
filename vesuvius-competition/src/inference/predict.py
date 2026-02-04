@@ -320,7 +320,7 @@ class VesuviusPredictor3D:
             state_dict = checkpoint.get('model_state_dict') or checkpoint.get('state_dict') or checkpoint
 
         if config is None and config_path:
-            from train import load_config
+            from src.training.train import load_config
             config = load_config(config_path)
 
         if config is None:

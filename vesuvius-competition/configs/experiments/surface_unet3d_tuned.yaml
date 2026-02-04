@@ -18,7 +18,7 @@ data:
   processed_dir: data/processed_3d
   patch_size: [160, 160, 160]
   mask_mode: multiclass
-  samples_per_volume: 600
+  samples_per_volume: 800
   val_samples_per_volume: 120
   augment: true
 
@@ -31,6 +31,9 @@ training:
   mixed_precision: false
   scheduler: cosine_warmup
   gradient_accumulation: 4
+
+logging:
+  save_interval: 10
 
 loss:
   type: dice_ce

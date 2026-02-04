@@ -20,7 +20,7 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
-from train import load_config, get_volume_ids  # noqa: E402
+from src.training.train import load_config, get_volume_ids  # noqa: E402
 from src.inference.predict import VesuviusPredictor3D  # noqa: E402
 from src.inference.create_submission import topo_postprocess  # noqa: E402
 
