@@ -8,7 +8,7 @@ from pathlib import Path
 from tqdm import tqdm
 import segmentation_models_pytorch as smp
 from src.models import get_model
-from monai.inferers import SlidingWindowInferer
+from monai.inferers import SlidingWindowInferer, sliding_window_inference
 from typing import Dict, List, Optional, Tuple
 import logging
 
@@ -341,14 +341,17 @@ class VesuviusPredictor3D:
         volume = _normalize_volume(volume)
         volume_tensor = torch.from_numpy(volume).unsqueeze(0).unsqueeze(0).to(self.device)
 
-        inferer = SlidingWindowInferer(
-            roi_size=self.roi_size,
-            overlap=self.overlap,
-            mode="gaussian",
-            sw_batch_size=self.sw_batch_size,
-        )
+        # Use direct sliding_window_inference to avoid MONAI API
+        # mismatches around sw_batch_size in some versions.
         with torch.no_grad():
-            logits = inferer(volume_tensor, self.model)
+            logits = sliding_window_inference(
+                inputs=volume_tensor,
+                roi_size=self.roi_size,
+                sw_batch_size=self.sw_batch_size,
+                predictor=self.model,
+                overlap=self.overlap,
+                mode="gaussian",
+            )
         return logits
 
     def predict_volume(self, volume: np.ndarray) -> np.ndarray:
