@@ -10,9 +10,11 @@ Usage:
 
 import argparse
 from pathlib import Path
+import random
 
 import torch
 import yaml
+import numpy as np
 
 from ..data.dataset import get_dataloaders
 from ..models import get_model
@@ -71,6 +73,7 @@ def _normalize_config(config, config_path):
         training_cfg.get('num_workers', data_cfg.get('num_workers', 4))
     )
     training_cfg.setdefault('mixed_precision', True)
+    training_cfg.setdefault('seed', validation_cfg.get('seed', 42))
 
     validation_cfg = config.setdefault('validation', {})
     validation_cfg.setdefault('split_ratio', 0.15)
@@ -207,6 +210,14 @@ def main(args=None):
         config['logging']['use_wandb'] = True
 
     config['training']['device'] = args.device
+
+    # Set seeds for reproducible comparisons across experiments
+    seed = int(config['training'].get('seed', config['validation'].get('seed', 42)))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
     # Print configuration
     print(f"\n{'='*60}")
