@@ -73,11 +73,11 @@ def _normalize_config(config, config_path):
         training_cfg.get('num_workers', data_cfg.get('num_workers', 4))
     )
     training_cfg.setdefault('mixed_precision', True)
-    training_cfg.setdefault('seed', validation_cfg.get('seed', 42))
 
     validation_cfg = config.setdefault('validation', {})
     validation_cfg.setdefault('split_ratio', 0.15)
     validation_cfg.setdefault('seed', 42)
+    training_cfg.setdefault('seed', validation_cfg.get('seed', 42))
 
     logging_cfg = config.setdefault('logging', {})
     logging_cfg.setdefault('use_wandb', False)
