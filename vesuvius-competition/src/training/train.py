@@ -267,8 +267,8 @@ def main(args=None):
     loss_fn = get_loss_function(config)
 
     # Create optimizer and scheduler
-    optimizer = get_optimizer(config, model)
-    scheduler = get_scheduler(config, optimizer)
+    optimizer = get_optimizer(model, config)
+    scheduler = get_scheduler(optimizer, config)
 
     print(f"\n⚙️ Training Setup:")
     print(f"   Optimizer: {config['training'].get('optimizer', 'adamw')}")
