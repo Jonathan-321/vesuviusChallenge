@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data files (too large)
+data/
+*.tif
+*.tiff
+*.npz
+*.npy
+
+# Model checkpoints
+models/
+*.pth
+*.pt
+*.ckpt
+
+# Logs
+logs/
+*.log
+training.log
+training_final.log
+
+# Outputs
+submissions/
+*.csv
+*.zip
+debug_predictions.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+synthetic_test/
+
+# Local config
+.env
+.env.local
+
+# Modal
+.modal/
+
+# Build
+*.egg-info/
+build/
+dist/

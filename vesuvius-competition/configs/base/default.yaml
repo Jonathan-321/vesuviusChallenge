@@ -1,0 +1,89 @@
+# Base configuration for Vesuvius Challenge
+
+# Data settings
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  cache_dir: data/cache
+  tile_size: 512
+  stride: 256
+  z_start: 15
+  z_end: 45
+  z_step: 1
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+
+# Model settings
+model:
+  architecture: unet  # unet, attention_unet, unet++, manet, linknet
+  encoder: resnet34
+  encoder_weights: imagenet
+  in_channels: 30
+  out_channels: 1
+  activation: null
+
+# Training settings
+training:
+  batch_size: 8
+  accumulate_grad_batches: 4
+  num_epochs: 100
+  optimizer: AdamW
+  learning_rate: 1e-3
+  weight_decay: 1e-4
+  scheduler: CosineAnnealingLR
+  warmup_epochs: 5
+  early_stopping_patience: 15
+  val_check_interval: 0.5
+  gradient_clip_val: 1.0
+  
+# Loss settings
+loss:
+  name: combined  # dice, focal, tversky, combined
+  dice_weight: 0.5
+  bce_weight: 0.5
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  tversky_alpha: 0.3
+  tversky_beta: 0.7
+
+# Augmentation settings
+augmentation:
+  train:
+    - RandomCrop: {height: 512, width: 512}
+    - HorizontalFlip: {p: 0.5}
+    - VerticalFlip: {p: 0.5}
+    - RandomRotate90: {p: 0.5}
+    - ShiftScaleRotate: {shift_limit: 0.1, scale_limit: 0.2, rotate_limit: 45, p: 0.5}
+    - ElasticTransform: {alpha: 120, sigma: 120 * 0.05, alpha_affine: 120 * 0.03, p: 0.3}
+    - GridDistortion: {num_steps: 5, distort_limit: 0.3, p: 0.3}
+    - RandomBrightnessContrast: {brightness_limit: 0.2, contrast_limit: 0.2, p: 0.5}
+    - RandomGamma: {gamma_limit: [80, 120], p: 0.5}
+    - GaussNoise: {var_limit: [10.0, 50.0], p: 0.3}
+    - GaussianBlur: {blur_limit: 3, p: 0.3}
+  val:
+    - CenterCrop: {height: 512, width: 512}
+
+# Experiment settings
+experiment:
+  name: baseline
+  seed: 42
+  deterministic: false
+  log_every_n_steps: 50
+  save_top_k: 3
+  monitor: val/dice
+  mode: max
+
+# Hardware settings
+hardware:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  strategy: ddp
+  sync_batchnorm: true
+
+# Paths
+paths:
+  checkpoint_dir: models/checkpoints
+  submission_dir: models/submissions
+  log_dir: logs
